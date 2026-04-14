@@ -1,0 +1,657 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>火柴人打羽毛球</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #333;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            font-family: Arial, sans-serif;
+            color: white;
+        }
+        
+        canvas {
+            background-color: #87CEEB;
+            border: 2px solid #333;
+        }
+        
+        .scoreboard {
+            display: flex;
+            justify-content: space-between;
+            width: 600px;
+            margin-bottom: 20px;
+            font-size: 24px;
+            font-weight: bold;
+        }
+        
+        .controls {
+            margin-top: 20px;
+        }
+        
+        button {
+            padding: 10px 20px;
+            margin: 0 10px;
+            font-size: 16px;
+            cursor: pointer;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+        }
+        
+        button:hover {
+            background-color: #45a049;
+        }
+        
+        .instructions {
+            margin-top: 20px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="scoreboard">
+        <div>玩家: <span id="player-score">0</span></div>
+        <div>电脑: <span id="computer-score">0</span></div>
+    </div>
+    <canvas id="gameCanvas" width="600" height="400"></canvas>
+    <div class="controls">
+        <button id="start-btn">开始</button>
+        <button id="pause-btn">暂停</button>
+        <button id="reset-btn">重置</button>
+    </div>
+    <div class="instructions">
+        <p>控制：A-左移，D-右移，W-跳跃，鼠标左键-挥拍</p>
+    </div>
+    
+    <script>
+        // 游戏变量
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const playerScoreElement = document.getElementById('player-score');
+        const computerScoreElement = document.getElementById('computer-score');
+        
+        let gameState = 'ready'; // ready, playing, paused, gameOver
+        let playerScore = 0;
+        let computerScore = 0;
+        let serveDelay = 0;
+        let isServing = false;
+        let currentServer = null;
+        
+        // 游戏区域边界（90%的屏幕宽度）
+        const gameAreaLeft = canvas.width * 0.05; // 左侧边界
+        const gameAreaRight = canvas.width * 0.95; // 右侧边界
+        
+        // 玩家
+        const player = {
+            x: 100,
+            y: 300,
+            width: 40,
+            height: 60,
+            speed: 5,
+            jumpPower: -10,
+            velocityY: 0,
+            onGround: true,
+            isSwinging: false,
+            swingFrame: 0
+        };
+        
+        // 电脑
+        const computer = {
+            x: 460,
+            y: 300,
+            width: 40,
+            height: 60,
+            speed: 3,
+            jumpPower: -10,
+            velocityY: 0,
+            onGround: true,
+            isSwinging: false,
+            swingFrame: 0,
+            isReturningToServe: false
+        };
+        
+        // 羽毛球
+        const ball = {
+            x: 300,
+            y: 200,
+            radius: 10,
+            velocityX: 5,
+            velocityY: 0,
+            gravity: 0.3
+        }
+        
+        // 键盘状态
+        const keys = {
+            a: false,
+            d: false,
+            w: false
+        };
+        
+        // 鼠标状态
+        let mouseX = 0;
+        let mouseY = 0;
+        let mouseDown = false;
+        
+        // 游戏循环
+        function gameLoop() {
+            if (gameState === 'playing') {
+                update();
+            }
+            draw();
+            requestAnimationFrame(gameLoop);
+        }
+        
+        // 更新游戏状态
+        function update() {
+            // 处理发球延迟
+            if (isServing) {
+                serveDelay--;
+                if (serveDelay <= 0) {
+                    isServing = false;
+                } else {
+                    // 发球时球跟随发球者的手
+                    if (currentServer === 'player') {
+                        ball.x = player.x + player.width / 2 - 10;
+                        ball.y = player.y + 35;
+                    } else if (currentServer === 'computer') {
+                        // 电脑回到发球位置
+                        if (computer.isReturningToServe) {
+                            if (computer.x > 450) {
+                                computer.x -= computer.speed;
+                            } else if (computer.x < 430) {
+                                computer.x += computer.speed;
+                            } else {
+                                computer.isReturningToServe = false;
+                            }
+                        }
+                        ball.x = computer.x + computer.width / 2 - 10;
+                        ball.y = computer.y + 35;
+                    }
+                }
+                // 即使在发球延迟期间，也允许玩家移动
+                updatePlayer();
+                updateComputer();
+                return;
+            }
+            
+            // 更新玩家
+            updatePlayer();
+            
+            // 更新电脑
+            updateComputer();
+            
+            // 更新羽毛球
+            updateBall();
+            
+            // 检查得分
+            checkScore();
+        }
+        
+        // 更新玩家
+        function updatePlayer() {
+            // 左右移动
+            if (keys.a && player.x > 0) {
+                player.x -= player.speed;
+            }
+            if (keys.d && player.x < canvas.width / 2 - player.width) {
+                player.x += player.speed;
+            }
+            
+            // 跳跃
+            if (keys.w && player.onGround) {
+                player.velocityY = player.jumpPower;
+                player.onGround = false;
+            }
+            
+            // 重力
+            player.velocityY += 0.5;
+            player.y += player.velocityY;
+            
+            // 地面碰撞
+            if (player.y > 300) {
+                player.y = 300;
+                player.velocityY = 0;
+                player.onGround = true;
+            }
+            
+            // 挥拍动画
+            if (player.isSwinging) {
+                player.swingFrame++;
+                if (player.swingFrame > 10) {
+                    player.isSwinging = false;
+                    player.swingFrame = 0;
+                }
+            }
+        }
+        
+        // 更新电脑
+        function updateComputer() {
+            // 处理电脑发球
+            if (currentServer === 'computer' && !isServing) {
+                // 电脑挥拍发球
+                computer.isSwinging = true;
+                ball.velocityX = -8;
+                ball.velocityY = -6;
+                currentServer = null;
+            }
+            
+            // 智能AI逻辑
+            if (ball.x > canvas.width / 2) {
+                // 追踪球
+                if (ball.x > computer.x + computer.width / 2) {
+                    computer.x += computer.speed;
+                } else if (ball.x < computer.x + computer.width / 2) {
+                    computer.x -= computer.speed;
+                }
+                
+                // 智能判断是否需要跳跃
+                if (ball.y < computer.y - 30 && computer.onGround) {
+                    computer.velocityY = computer.jumpPower;
+                    computer.onGround = false;
+                }
+                
+                // 挥拍
+                if (Math.abs(ball.x - (computer.x + computer.width / 2)) < 50 && 
+                    Math.abs(ball.y - (computer.y + computer.height / 2)) < 50) {
+                    computer.isSwinging = true;
+                }
+            }
+            
+            // 重力
+            computer.velocityY += 0.5;
+            computer.y += computer.velocityY;
+            
+            // 地面碰撞
+            if (computer.y > 300) {
+                computer.y = 300;
+                computer.velocityY = 0;
+                computer.onGround = true;
+            }
+            
+            // 挥拍动画
+            if (computer.isSwinging) {
+                computer.swingFrame++;
+                if (computer.swingFrame > 10) {
+                    computer.isSwinging = false;
+                    computer.swingFrame = 0;
+                }
+            }
+        }
+        
+        // 更新羽毛球
+        function updateBall() {
+            // 只有当球有速度时才更新位置
+            if (ball.velocityX !== 0 || ball.velocityY !== 0) {
+                // 应用重力
+                ball.velocityY += ball.gravity;
+                
+                // 更新位置
+                ball.x += ball.velocityX;
+                ball.y += ball.velocityY;
+                
+                // 边界碰撞 - 限制在90%的游戏区域内
+                if (ball.y > canvas.height - ball.radius) {
+                    ball.y = canvas.height - ball.radius;
+                    // 球落地，不反弹
+                }
+                
+                if (ball.y < ball.radius) {
+                    ball.y = ball.radius;
+                    ball.velocityY *= -0.6;
+                }
+                
+                if (ball.x < gameAreaLeft) {
+                    ball.x = gameAreaLeft;
+                    ball.velocityX *= -0.3;
+                    ball.velocityY += 2;
+                }
+                
+                if (ball.x > gameAreaRight) {
+                    ball.x = gameAreaRight;
+                    ball.velocityX *= -0.3;
+                    ball.velocityY += 2;
+                }
+                
+                // 玩家碰撞
+                if (ball.x < canvas.width / 2 && 
+                    ball.x > player.x && 
+                    ball.x < player.x + player.width && 
+                    ball.y > player.y && 
+                    ball.y < player.y + player.height) {
+                    // 挥拍时的反弹
+                    if (player.isSwinging) {
+                        ball.velocityX = 8;
+                        ball.velocityY = -10 + (Math.random() * 3);
+                    }
+                }
+                
+                // 电脑碰撞
+                if (ball.x > canvas.width / 2 && 
+                    ball.x > computer.x && 
+                    ball.x < computer.x + computer.width && 
+                    ball.y > computer.y && 
+                    ball.y < computer.y + computer.height) {
+                    // 挥拍时的反弹
+                    if (computer.isSwinging) {
+                        ball.velocityX = -8;
+                        ball.velocityY = -10 + (Math.random() * 3);
+                    }
+                }
+                
+                // 网碰撞
+                if (ball.x > canvas.width / 2 - 5 && ball.x < canvas.width / 2 + 5) {
+                    if (ball.y < 250) {
+                        // 球从球网上方通过，允许通过
+                    } else {
+                        // 球碰到球网，掉落
+                        ball.velocityX *= 0.5;
+                        ball.velocityY = 5;
+                    }
+                }
+            }
+        }
+        
+        // 检查得分
+        function checkScore() {
+            // 球落地得分
+            if (ball.y >= canvas.height - ball.radius) {
+                // 球在哪个半场落地
+                if (ball.x < canvas.width / 2) {
+                    // 球在玩家半场落地，电脑得分
+                    computerScore++;
+                    computerScoreElement.textContent = computerScore;
+                    resetBall('computer');
+                } else {
+                    // 球在电脑半场落地，玩家得分
+                    playerScore++;
+                    playerScoreElement.textContent = playerScore;
+                    resetBall('player');
+                }
+            }
+            
+            // 检查游戏结束
+            if (playerScore >= 20 || computerScore >= 20) {
+                gameState = 'gameOver';
+            }
+        }
+        
+        // 重置羽毛球
+        function resetBall(scorer) {
+            // 设置发球延迟
+            isServing = true;
+            serveDelay = 60; // 1-2秒的延迟（60帧）
+            currentServer = scorer;
+            
+            if (scorer === 'player') {
+                // 玩家得分，玩家发球
+                ball.x = player.x + player.width / 2 - 10;
+                ball.y = player.y + 35;
+                ball.velocityX = 0;
+                ball.velocityY = 0;
+                // 确保玩家站在地面上
+                player.y = 300;
+                player.velocityY = 0;
+                player.onGround = true;
+            } else if (scorer === 'computer') {
+                // 电脑得分，电脑发球
+                // 电脑回到发球位置
+                computer.isReturningToServe = true;
+                ball.x = 450;
+                ball.y = 335;
+                ball.velocityX = 0;
+                ball.velocityY = 0;
+                // 确保电脑站在地面上
+                computer.y = 300;
+                computer.velocityY = 0;
+                computer.onGround = true;
+            } else {
+                // 初始发球
+                ball.x = 300;
+                ball.y = 200;
+                ball.velocityX = Math.random() > 0.5 ? 8 : -8;
+                ball.velocityY = -8;
+                currentServer = null;
+            }
+        }
+        
+        // 绘制游戏
+        function draw() {
+            // 清空画布
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // 绘制背景
+            drawBackground();
+            
+            // 绘制游戏区域边界
+            drawGameArea();
+            
+            // 绘制网
+            drawNet();
+            
+            // 绘制玩家
+            drawStickman(player);
+            
+            // 绘制电脑
+            drawStickman(computer);
+            
+            // 绘制羽毛球
+            drawBall();
+            
+            // 绘制游戏状态
+            drawGameState();
+        }
+        
+        // 绘制背景
+        function drawBackground() {
+            // 天空
+            ctx.fillStyle = '#87CEEB';
+            ctx.fillRect(0, 0, canvas.width, 350);
+            
+            // 地面
+            ctx.fillStyle = '#228B22';
+            ctx.fillRect(0, 350, canvas.width, 50);
+        }
+        
+        // 绘制游戏区域边界
+        function drawGameArea() {
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(gameAreaLeft, 0);
+            ctx.lineTo(gameAreaLeft, canvas.height);
+            ctx.moveTo(gameAreaRight, 0);
+            ctx.lineTo(gameAreaRight, canvas.height);
+            ctx.stroke();
+        }
+        
+        // 绘制网
+        function drawNet() {
+            ctx.fillStyle = 'white';
+            ctx.fillRect(canvas.width / 2 - 2, 250, 4, 100);
+        }
+        
+        // 绘制火柴人
+        function drawStickman(character) {
+            // 头部
+            ctx.beginPath();
+            ctx.arc(character.x + character.width / 2, character.y + 15, 10, 0, Math.PI * 2);
+            ctx.fillStyle = 'white';
+            ctx.fill();
+            ctx.strokeStyle = 'black';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            
+            // 身体
+            ctx.beginPath();
+            ctx.moveTo(character.x + character.width / 2, character.y + 25);
+            ctx.lineTo(character.x + character.width / 2, character.y + 55);
+            ctx.stroke();
+            
+            // 手臂
+            if (character.isSwinging) {
+                // 挥拍动画
+                const angle = Math.sin(character.swingFrame * 0.5) * Math.PI / 4;
+                ctx.beginPath();
+                ctx.moveTo(character.x + character.width / 2, character.y + 30);
+                ctx.lineTo(character.x + character.width / 2 + Math.cos(angle) * 30, character.y + 30 + Math.sin(angle) * 30);
+                ctx.stroke();
+                
+                // 球拍
+                ctx.fillStyle = 'red';
+                ctx.beginPath();
+                ctx.arc(character.x + character.width / 2 + Math.cos(angle) * 40, character.y + 30 + Math.sin(angle) * 40, 15, 0, Math.PI * 2);
+                ctx.fill();
+            } else {
+                // 正常手臂
+                ctx.beginPath();
+                ctx.moveTo(character.x + character.width / 2, character.y + 30);
+                ctx.lineTo(character.x + character.width / 2 - 20, character.y + 40);
+                ctx.stroke();
+                
+                ctx.beginPath();
+                ctx.moveTo(character.x + character.width / 2, character.y + 30);
+                ctx.lineTo(character.x + character.width / 2 + 20, character.y + 40);
+                ctx.stroke();
+                
+                // 球拍
+                ctx.fillStyle = 'red';
+                ctx.beginPath();
+                ctx.arc(character.x + character.width / 2 + 30, character.y + 40, 15, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            
+            // 腿部
+            ctx.beginPath();
+            ctx.moveTo(character.x + character.width / 2, character.y + 55);
+            ctx.lineTo(character.x + character.width / 2 - 15, character.y + 80);
+            ctx.stroke();
+            
+            ctx.beginPath();
+            ctx.moveTo(character.x + character.width / 2, character.y + 55);
+            ctx.lineTo(character.x + character.width / 2 + 15, character.y + 80);
+            ctx.stroke();
+        }
+        
+        // 绘制羽毛球
+        function drawBall() {
+            ctx.fillStyle = 'white';
+            ctx.beginPath();
+            ctx.arc(ball.x, ball.y, ball.radius, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.strokeStyle = 'black';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+        }
+        
+        // 绘制游戏状态
+        function drawGameState() {
+            if (gameState === 'ready') {
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = 'white';
+                ctx.font = '30px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText('点击开始按钮开始游戏', canvas.width / 2, canvas.height / 2);
+            }
+            
+            if (gameState === 'paused') {
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = 'white';
+                ctx.font = '30px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText('游戏暂停', canvas.width / 2, canvas.height / 2);
+            }
+            
+            if (gameState === 'gameOver') {
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = 'white';
+                ctx.font = '30px Arial';
+                ctx.textAlign = 'center';
+                if (playerScore >= 20) {
+                    ctx.fillText('玩家获胜！', canvas.width / 2, canvas.height / 2);
+                } else {
+                    ctx.fillText('电脑获胜！', canvas.width / 2, canvas.height / 2);
+                }
+            }
+        }
+        
+        // 事件监听器
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'a') keys.a = true;
+            if (e.key === 'd') keys.d = true;
+            if (e.key === 'w') keys.w = true;
+        });
+        
+        document.addEventListener('keyup', function(e) {
+            if (e.key === 'a') keys.a = false;
+            if (e.key === 'd') keys.d = false;
+            if (e.key === 'w') keys.w = false;
+        });
+        
+        canvas.addEventListener('mousemove', function(e) {
+            const rect = canvas.getBoundingClientRect();
+            mouseX = e.clientX - rect.left;
+            mouseY = e.clientY - rect.top;
+        });
+        
+        canvas.addEventListener('mousedown', function(e) {
+            mouseDown = true;
+            if (gameState === 'playing') {
+                player.isSwinging = true;
+                // 如果是玩家发球，挥拍时发球，且必须站着发球
+                if (currentServer === 'player' && !isServing && player.onGround) {
+                    ball.velocityX = 8;
+                    ball.velocityY = -6;
+                    currentServer = null;
+                }
+            }
+        });
+        
+        canvas.addEventListener('mouseup', function(e) {
+            mouseDown = false;
+        });
+        
+        // 按钮事件
+        document.getElementById('start-btn').addEventListener('click', function() {
+            if (gameState === 'ready' || gameState === 'gameOver') {
+                gameState = 'playing';
+            } else if (gameState === 'paused') {
+                gameState = 'playing';
+            }
+        });
+        
+        document.getElementById('pause-btn').addEventListener('click', function() {
+            if (gameState === 'playing') {
+                gameState = 'paused';
+            }
+        });
+        
+        document.getElementById('reset-btn').addEventListener('click', function() {
+            gameState = 'ready';
+            playerScore = 0;
+            computerScore = 0;
+            playerScoreElement.textContent = '0';
+            computerScoreElement.textContent = '0';
+            resetBall();
+            player.x = 100;
+            player.y = 300;
+            computer.x = 460;
+            computer.y = 300;
+        });
+        
+        // 开始游戏循环
+        gameLoop();
+    </script>
+</body>
+</html>
